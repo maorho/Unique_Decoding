@@ -1,5 +1,7 @@
 # Unique_Decoding
 Unique Decoding of RS Code
+
+
 How to run the file:
 1. go to https://cocalc.com/ and upload the file
 2. Then you can open the file and click on the run button
