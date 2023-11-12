@@ -1,0 +1,222 @@
+import numpy as np
+import random
+from sympy import *
+
+def calculate_A(e, k, w_list, q):
+    """
+    Calculate the matrix A for list decoding.
+    """
+    n = len(w_list)
+    matrix = np.zeros((n, e + e + k), dtype=int)
+    for i in range(0, n):
+        row1 = np.zeros(e, dtype=int)
+        for j in range(0, e):
+            row1[j] = w_list[i] * i ** j
+        row2 = np.zeros(e + k, dtype=int)
+        for j in range(0, e + k):
+            row2[j] = Mod(-(i ** j), q)
+        matrix[i] = np.concatenate((row1, row2), axis=0)
+    return matrix
+
+def calculate_b(w, e):
+    """
+    Calculate the b vector for list decoding.
+    """
+    return [-w[i] * i ** e for i in range(len(w))]
+
+def build_poly_E(degX):
+    """
+    Build the polynomial E(x) with symbolic terms for error location.
+    """
+    x = symbols('x')
+    f = Poly(0, x)  # Initialize f as 0
+    sym = []
+    b = 0
+    for a in range(degX, -1, -1):
+        if a == degX:
+            f += x ** a
+        else:
+            b += 1
+            term = symbols('D_{}'.format(b))
+            sym.append(term)
+            f += term * x ** a
+    return sym, f
+
+def build_poly_N(degX, e):
+    """
+    Build the polynomial N(x) with symbolic terms for the message.
+    """
+    x = symbols('x')
+    f = Poly(0, x)  # Initialize f as 0
+    sym = []
+    b = e
+    for a in range(degX, -1, -1):
+        b += 1
+        term = symbols('D_{}'.format(b))
+        sym.append(term)
+        f += term * x ** a
+    return sym, f
+
+def substitute_values(Q, sym, L):
+    """
+    Substitute values in the polynomial Q using the given symbols and list of coefficients.
+    """
+    substitutions = {}
+    for s, l in zip(sym, L):
+        substitutions[s] = l
+    return Q.subs(substitutions)
+
+def polynomial_interpolation(values, q):
+    """
+    Perform polynomial interpolation on the given values modulo q.
+    """
+    x_values = np.arange(len(values))  # Use 0, 1, 2, ... as the x-values
+    coefficients = np.polyfit(x_values, values, deg=len(values) - 1)
+    poly = np.poly1d(coefficients % q)
+    return poly
+
+def row_reduction_with_modulo(matrix, vector, q):
+    """
+    Perform row reduction (Gaussian elimination) on the matrix and vector modulo q.
+    """
+    n = matrix.shape[0]
+
+    # Convert the vector to a column vector with n rows
+    vector = vector.reshape(n, 1)
+
+    # Augment the matrix with the vector
+    augmented_matrix = np.hstack((matrix, vector))
+
+    for col in range(n):
+        # Find the pivot row and swap
+        pivot_row = max(range(col, n), key=lambda r: abs(augmented_matrix[r, col]))
+        augmented_matrix[[col, pivot_row]] = augmented_matrix[[pivot_row, col]]
+        pivot = augmented_matrix[col, col]
+
+        # Calculate the modular inverse of the pivot element
+        if int(pivot) == 0:
+            break
+        inv_pivot = pow(int(pivot), -1, q)
+
+        # Make the pivot element equal to 1
+        augmented_matrix[col] = (augmented_matrix[col] * inv_pivot) % q
+
+        # Perform row operations to eliminate other elements in the column
+        for row in range(n):
+            if row != col:
+                factor = augmented_matrix[row, col]
+                augmented_matrix[row] = (augmented_matrix[row] - factor * augmented_matrix[col]) % q
+
+    # Extract the row-reduced matrix and vector
+    reduced_matrix = augmented_matrix[:, :-1]
+    reduced_vector = augmented_matrix[:, -1]
+
+    return reduced_matrix, reduced_vector
+
+def polynomial_division_with_modulo(dividend, divisor, modulo):
+    """
+    Perform polynomial division with modulo operation on the given polynomials.
+    """
+    x = symbols('x')
+    dividend_poly = Poly(dividend, x)
+    divisor_poly = Poly(divisor, x)
+
+    # Perform polynomial division and get the quotient and remainder
+    quotient_poly, remainder_poly = divmod(dividend_poly, divisor_poly)
+
+    # Reduce coefficients of the quotient polynomial modulo 'modulo'
+    quotient_coeffs = [coef % modulo for coef in quotient_poly.all_coeffs()]
+    quotient_poly_modulo = Poly(quotient_coeffs, x)
+
+    # Reduce coefficients of the remainder polynomial modulo 'modulo'
+    remainder_coeffs = [coef % modulo for coef in remainder_poly.all_coeffs()]
+    remainder_poly_modulo = Poly(remainder_coeffs, x)
+
+    return quotient_poly_modulo, remainder_poly_modulo
+
+# ------------------------------------- Encoding ----------------------------------------
+# k <= n
+def encode(msg, n, err):
+    q = 127
+    if n > 127:
+        q = n
+        if not isprime(q):
+            q = nextprime(q)
+    ascii_array = []
+    for letter in msg:  # Change symbols to Ascii
+        ascii_value = ord(letter)
+        ascii_array.append(ascii_value)
+    pol = polynomial_interpolation(ascii_array, q)  # Create the polynom
+    enc = []
+    for i in range(0, n):
+        enc.append(round(pol(i) % q))
+    enc2 = list(enc)
+    if err > 0:
+        for i in random.sample(range(len(enc2)), err):  # Choose random index
+            cur = enc2[i]
+            while enc2[i] == cur:
+                enc2[i] = random.randint(0, q)  # Replace the value
+    return q, pol, enc, enc2
+
+# ----------------------------------- List decoding -------------------------------------
+def rs_decode(n, k, e, y_values, q):
+    sub_dict_E, E = build_poly_E(e)  # E(x) is monic degree e polynomial, sub_dict is list of Coefficients
+    sub_dict_N, N = build_poly_N(e + k - 1, e)  # N(x) is degree e+k-1 polynomial, sub_dict is list of Coefficients
+    b = np.mod(calculate_b(y_values, e), q)
+    x = []
+    for i in sub_dict_E:
+        x.append(i)
+    for i in sub_dict_N:
+        x.append(i)
+    np.matrix(x)
+    a = np.mod(calculate_A(e, k, y_values, q), q)
+    a_echelon, b_echelon = row_reduction_with_modulo(a, b, q)
+    if n > 2 * e + k:
+        b_echelon = b_echelon[:-(n - 2 * e - k)]
+    first_e_vars = b_echelon[:e]
+    rest = b_echelon[e:]
+    Ef = substitute_values(E, sub_dict_E, first_e_vars[::-1])  # E(x)
+    Nf = substitute_values(N, sub_dict_N, rest[::-1])  # Q(x)
+    f, rest = polynomial_division_with_modulo(Nf, Ef, q)
+    return f
+
+# --------------------------------------- Main ------------------------------------------
+def main():
+    tests("a", 10, 2)
+    tests("a", 15, 5)
+    tests("a", 50, 30)
+    tests("abc", 10, 2)
+    tests("abc", 20, 5)
+    tests("project", 15, 1)
+    tests("project", 40, 10)
+
+def tests(msg, n, err):
+    k = len(msg)
+    if err > (n - k) // 2:
+        print()
+        print("!ERROR! error > (n-k)/2 !")
+        print('Original message: ' + msg)
+        print('n: ' + str(n))
+        print('Errors: ' + str(err))
+        return
+
+    q, pol, encoded_msg, encoded_msg_with_errors = encode(msg, n, err)
+
+    print('')
+    print('Original message: ' + msg)
+    print('{} {}'.format("Encoded message:               ", ' '.join([str(i) for i in encoded_msg])))
+    if err > 0:
+        print(
+            '{} {}'.format("Encoded message with errors:   ", ' '.join([str(i) for i in encoded_msg_with_errors])))
+    print()
+
+    f = rs_decode(n, k, err, encoded_msg_with_errors, q)
+    ans = []
+    for i in range(0, k):
+        ans.append(f(i) % q)
+    ans = ''.join(chr(char) for char in ans)
+    print("Decoded message:  "+ str(ans))
+    
+
+if __name__ == "__main__":
+    main()
